@@ -1,0 +1,120 @@
+```{r}
+library(tidyverse)
+library(reticulate)
+library(stringr)
+library (plyr)
+library(dplyr) 
+library(ggplot2)
+library(ggrepel)
+library(forcats)
+library(scales)
+```
+
+```{r}
+tcga_mutations<- read.delim("~/Downloads/Dissertation/Cancer gene/pre_tcga_mutations_data.txt", header=T) # 526059
+tcga_mutations$gene_name<-sub('.', '', gsub('^.|.$', '', tcga_mutations$HGVSp_Short))
+tcga_mutations$gene_name<-paste(tcga_mutations$Hugo_Symbol, tcga_mutations$gene_name, sep="_")
+tcga_mutations<-tcga_mutations %>% filter(tcga_mutations$Variant_Type=="SNP"& tcga_mutations$Variant_Classification=="Missense_Mutation")
+# 290235
+#select the codons that are included in the pickel data 
+val_codon<-tcga_mutations[which(tcga_mutations$gene_name%in% codon_mutation$codon),] #9429
+val_codon<-val_codon%>%distinct(gene_name,Amino_acids,Tumor_Sample_Barcode) # 9001
+tumor_table_val<-as.data.frame(table(val_codon$Tumor_Sample_Barcode))# 2000
+ind_tumor_val<-which(tumor_table_val$Freq==0)# 303
+tumor_table_val<-tumor_table_val[-ind_tumor_val,]# 1697 
+# There are 1697 identical tumor sample
+gene_val<-as.data.frame(table(val_codon$gene_name))# 7166
+gene_val$prob<-gene_val$Freq/1697
+codon_mutation_val<-codon_mutation[which(codon_mutation$codon%in%gene_val$Var1),]# 7166
+sort.prob_1_val<-gene_val[order(gene_val$Var1),]
+sort.prob_0_val <-codon_mutation_val[order(codon_mutation_val$codon),]
+sort.prob_1_val[1:15, ]
+sort.prob_0_val[1:15, ]
+a_val<-mapply(binom.test,sort.prob_1_val$Freq, sort.prob_0_val$probability, n=1697, alternative = "greater", conf.level = 0.95, SIMPLIFY = FALSE)
+
+pvalue_val=c()
+for(i in 1:7166){
+  pvalue_val[i]<-a_val[[i]]$p.value
+}
+pvalue_val<-data.frame(gene_val$Var1,gene_val$Freq,pvalue_val)
+
+pvalue_val$BH<-p.adjust(pvalue_val$pvalue_val, method = "BH", n = 7166)
+pvalue_val$BY<-p.adjust(pvalue_val$pvalue_val, method = "BY", n = 7166)
+pvalue_val$Bon<-p.adjust(pvalue_val$pvalue_val, method = "bonferroni", n = 7166)
+Bon_P_val<-which(pvalue_val$Bon<0.01)
+Bon_codon_val<-pvalue_val[Bon_P_val,] # 155
+BY_P_val<-which(pvalue_val$BY<0.01)
+BY_codon_val<-pvalue_val[BY_P_val,] # 366
+BH_P_val<-which(pvalue_val$BH<0.01)
+BH_codon_val<-pvalue_val[BH_P_val,]# 518
+
+```
+
+```{r}
+BH_intersect<-intersect(BH_codon_val$gene_val.Var1,BH_codon$gene.Var1)# 268/518
+BY_intersect<-intersect(BY_codon_val$gene_val.Var1,BY_codon$gene.Var1)# 217/366
+Bon_intersect<-intersect(Bon_codon_val$gene_val.Var1,Bon_codon$gene.Var1)# 140/155 
+BY<-p_value[which(p_value$gene.Var1%in% BY_intersect),]
+BY<-p_value[which(p_value$gene.Var1%in% BY_intersect),]
+Bon<-p_value[which(p_value$gene.Var1%in% Bon_intersect),]
+BH<-p_value[which(p_value$gene.Var1%in% BH_intersect),]
+
+# see the number of mutation for each method
+quantile(Bon_codon$gene.Freq,c(0.25,0.5,0.75,0.99))
+quantile(BY_codon$gene.Freq,c(0.25,0.5,0.75,0.99))
+quantile(BH_codon$gene.Freq,c(0.25,0.5,0.75,0.99))
+```
+
+## label for driver mutation from two data set
+```{r}
+pvalue_val$genie<-rep(0,7166)
+pvalue_val$tcga<-rep(0,7166)
+pvalue_val$tcga[which(pvalue_val$gene_val.Var1%in%BY_codon_val$gene_val.Var1)]<-1
+pvalue_val$genie[which(pvalue_val$gene_val.Var1%in%BY_codon$gene.Var1)]<-1
+# just check the number 
+# which(pvalue_val$tcga==0&pvalue_val$genie==0)# 6249
+# (1,1) 217;(1,0) 551; (0,1)149
+# false positive??
+false_pos<-pvalue_val[which(pvalue_val$tcga==0&pvalue_val$genie==1),]
+genie_false_pos<-BY_codon[which(BY_codon$gene.Var1%in%false_pos$gene_val.Var1),]
+## driver mutation
+driver_mut<-pvalue_val[which(pvalue_val$tcga==1&pvalue_val$genie==1),]
+genie_driver_mut<-BY_codon[which(BY_codon$gene.Var1%in%driver_mut$gene_val.Var1),]
+# reorder the q-value
+newgenie_driver_mut <- genie_driver_mut[order(genie_driver_mut$BY),]
+## non driver mutations
+non_driver_mut<-pvalue_val[which(pvalue_val$tcga==0&pvalue_val$genie==0),]
+genie_non_driver_mut<-p_value[which(p_value$gene.Var1%in%non_driver_mut$gene_val.Var1),]
+
+
+```
+
+
+
+## plot of gene level for 217 codons 
+```{r}
+driver_gene<-str_split(genie_driver_mut$gene.Var1,"_")
+driver_gene_name=c()
+for(i in 1:217){
+  driver_gene_name[i]<-driver_gene[[i]][1]
+}
+driver_gene_name<-as.data.frame(table(driver_gene_name))
+driver_codon_mean<-mean(genie_driver_mut$gene.Freq)
+ggplot(driver_gene_name,aes(x=driver_gene_name,y=Freq))+geom_bar(stat = 'identity',,fill="4",width = 0.6) + xlab("Gene Name")+ylab("No.of driver codons ")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size = 5))
+```
+
+
+## Export the drive mutations 
+```{r}
+significent_codon<-BY_codon[,c(1,2,5)]
+colnames(significent_codon)<-c("Codon","Tumor_Count","Qvalue")
+significent_codon <- significent_codon[order(significent_codon$Qvalue),]
+significent_codon$Validation_level<-rep("Potential driver mutation",4988)
+significent_codon$Validation_level[which(significent_codon$Qvalue<10^(-4))]=c("level 2")
+significent_codon$Validation_level[which(significent_codon$Qvalue<10^(-10))]=c("level 3")
+quantile(significent_codon$Tumor_Count,c(0.25,0.5,0.75,0.99))
+
+write.csv(significent_codon,"~/Downloads/Dissertation/Cancer gene/BY_driver_mutation.csv", row.names = FALSE)
+```
+
+

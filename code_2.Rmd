@@ -1,0 +1,111 @@
+```{r}
+library(tidyverse)
+library(reticulate)
+library(stringr)
+library (plyr)
+library(dplyr) 
+library(ggplot2)
+library(ggrepel)
+library(forcats)
+library(scales)
+```
+
+
+```{r}
+genie_data_mutations<- read.delim("~/Downloads/Dissertation/Cancer gene/genie_data_mutations_extended.txt", header=T)
+source_python("~/Downloads/Dissertation/Cancer gene/pickle_reader.py")
+pickle_data <- read_pickle_file("~/Downloads/Dissertation/Cancer gene/codon_mutability.pickle")# 176109
+
+codon_mutation <- ldply (pickle_data, data.frame)
+colnames(codon_mutation)<-c("codon","probability")
+# filter the Variant type by SNP, and Missense Mutation 
+genie_data_mutations<-genie_data_mutations %>% filter(genie_data_mutations$Variant_Type=="SNP"& genie_data_mutations$Variant_Classification=="Missense_Mutation")
+# 365437
+# check if the start and end position is same
+stopifnot(genie_data_mutations$End_Position==genie_data_mutations$Start_Position)
+genie_data_mutations$gene_name<-sub('.', '', gsub('^.|.$', '', genie_data_mutations$HGVSp_Short))
+genie_data_mutations$gene_name<-paste(genie_data_mutations$Hugo_Symbol, genie_data_mutations$gene_name, sep="_")
+genie_data_mutations<-genie_data_mutations[-309033,]
+# 365436
+
+diff_codon<-setdiff(genie_data_mutations$gene_name,codon_mutation$codon) 
+# get 27 codons that are not included in the pickel data and delete them
+
+ind<-which(genie_data_mutations$gene_name  %in% c("AC103801.2_E15","AC103801.2_T12","AL161450.1_G22","AL161450.1_I6" , "AL161450.1_M9","AL161450.1_V18","AP000758.1_V44", "C1orf147_E155","C1orf147_G154" ,"C1orf147_G212","C1orf147_H169" , "C1orf147_P179" ,"C1orf147_Q132" , "C1orf147_R100" , "C1orf147_S216" , "C1orf147_V57","C1orf173_G841","C20orf26_P807","C6orf132_A334","FAM230A_S798" ,"NPIPA8_M175" , "PAXIP1-AS2_R91", "PRSS56_L78" , "SSX2_A6" ,"TRIM49B_E194","TTC40_F2636" ,"ZNF727_H418"))
+
+genie_data_mutations<-genie_data_mutations[-ind,]
+```
+
+
+```{r}
+# delete the duplicated mutational data
+data<-genie_data_mutations%>%distinct(Tumor_Sample_Barcode,gene_name,Codons)
+gene<-as.data.frame(table(data$gene_name))
+data_table_num<-as.data.frame(table(gene$Freq))
+#gene<-as.data.frame(table(genie_data_mutations$gene_name))
+data_table_num$prob<-round(data_table_num$Freq/176109,4)
+#number of each codon mutated 
+gene<-as.data.frame(table(data$gene_name))
+tumor_table<-as.data.frame(table(data$Tumor_Sample_Barcode))
+ind_tumor<-which(tumor_table$Freq==0)
+tumor_table<-tumor_table[-ind_tumor,] # 59815
+# mutability of each codon
+gene$prob<-gene$Freq/59815
+```
+
+```{r}
+# plot
+library(plotrix)
+barplot(data_table_num$Freq)
+ggplot(data_table_num, aes(x=data_table_num$Var1,y=data_table_num$Freq)) + geom_bar(position="dodge", stat="identity")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size = 5))+xlab("Observed mutations")+ylab("No.of mutational codons ")
+
+
+
+# pie plot
+num_mutation <- data.frame(
+  group = c("1", "2", "3","4","5","6","7","8","9","Over 9"),
+  value = c(117236, 33170, 12217,5413,2823,1591,959,583,399,1718)
+  )
+num_mutation$prop<-percent(num_mutation$value / sum(num_mutation$value))
+head(num_mutation)
+bp<- ggplot(num_mutation, aes(x="", y=value, fill=group))+
+geom_bar(width = 1, stat = "identity")+coord_polar("y", start=0)+ geom_label_repel(aes(label = prop), size=2, show.legend = F, nudge_x = 1) +
+       guides(fill = guide_legend(title = "Group"))
+bp
+```
+
+#binomial test and calculate the significent score
+```{r}
+
+sort.prob_1 <- gene[order(gene$Var1), ]
+sort.prob_0 <- codon_mutation[order(codon_mutation$codon) , ]
+sort.prob_1[1:15, ]
+sort.prob_0[1:15, ]
+a<-mapply(binom.test,sort.prob_1$Freq, sort.prob_0$probability, n=59815, alternative = "greater", conf.level = 0.95, SIMPLIFY = FALSE)
+
+pvalue=c()
+for(i in 1:176109){
+  pvalue[i]<-a[[i]]$p.value
+}
+p_value<-data.frame(gene$Var1,gene$Freq,pvalue)
+
+```
+
+# multiple test correction
+```{r}
+
+p_value$BH<-p.adjust(p_value$pvalue, method = "BH", n = 176109)
+p_value$BY<-p.adjust(p_value$pvalue, method = "BY", n = 176109)
+p_value$Bon<-p.adjust(p_value$pvalue, method = "bonferroni", n = 176109)
+Bon_P<-which(p_value$Bon<0.01)
+Bon_codon<-p_value[Bon_P,] # 2590
+BY_P<-which(p_value$BY<0.01)
+BY_codon<-p_value[BY_P,] # 4988
+BH_P<-which(p_value$BH<0.01)
+BH_codon<-p_value[BH_P,]# 9307
+
+
+```
+
+
+
